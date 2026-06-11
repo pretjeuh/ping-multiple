@@ -13,6 +13,20 @@
 #              gray = no sample yet. Newest sample on the right.
 set -u
 
+# ── runtime requirements check ────────────────────────────────────────────────
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  printf 'Error: bash 4+ required (you have %s).\n' "$BASH_VERSION" >&2
+  printf 'On macOS: brew install bash\n' >&2
+  exit 1
+fi
+for _cmd in ping awk mktemp; do
+  if ! command -v "$_cmd" >/dev/null 2>&1; then
+    printf 'Error: required command not found: %s\n' "$_cmd" >&2
+    exit 1
+  fi
+done
+unset _cmd
+
 # ── config ────────────────────────────────────────────────────────────────────
 FAST_INTERVAL=1
 FAST_TIMEOUT=1
