@@ -6,6 +6,7 @@
 #   ./ping-multiple.sh 8.8.8.8,1.1.1.1,...     pass destinations directly (ICMP)
 #   ./ping-multiple.sh --guide                  interactive wizard (IPs + probe type)
 #   ./ping-multiple.sh --csv FILE               import targets from CSV file
+#   ./ping-multiple.sh --log FILE               append state-change events to FILE
 #
 # CSV format (header line optional):
 #   ip,label,probe
@@ -22,6 +23,8 @@
 # TCP probe: 10s cadence, 5s timeout — UP/DOWN + connect latency.
 #
 # Bar legend:  green=up/fast  yellow=slow(ICMP only)  red=down  gray=no sample
+# Sparkline:   8-level block chars showing RTT trend (last 20 readings, ICMP only)
+# On exit:     summary CSV written to ping-multiple-YYYY-MM-DD-HHmm.csv
 set -u
 
 # ── runtime requirements check ────────────────────────────────────────────────
@@ -45,6 +48,7 @@ SLOW_INTERVAL=5
 SLOW_TIMEOUT=5
 SLOW_MS=200
 HISTORY=60
+SPARKLINE_HISTORY=20
 COUNT=2
 TCP_INTERVAL=10
 TCP_TIMEOUT=5
@@ -165,6 +169,39 @@ parse_probe() {
   esac
 }
 
+# render a sparkline string from a file of space-separated RTT values (newest last)
+# outputs SPARKLINE_HISTORY block characters; -1 entries render as a space
+render_sparkline() {
+  local rtts_file="$1"
+  [ ! -s "$rtts_file" ] && printf '%*s' "$SPARKLINE_HISTORY" '' && return
+  local vals
+  read -ra vals < "$rtts_file"
+
+  local min_v=999999 max_v=0
+  for v in "${vals[@]}"; do
+    [ "$v" = "-1" ] && continue
+    (( v < min_v )) && min_v=$v
+    (( v > max_v )) && max_v=$v
+  done
+
+  local blocks=('▁' '▂' '▃' '▄' '▅' '▆' '▇' '█')
+  local range=$(( max_v - min_v ))
+  local out=""
+  local pad=$(( SPARKLINE_HISTORY - ${#vals[@]} ))
+  for ((p=0; p<pad; p++)); do out+=" "; done
+  for v in "${vals[@]}"; do
+    if [ "$v" = "-1" ]; then
+      out+=" "
+    elif [ "$range" -eq 0 ]; then
+      out+="${blocks[3]}"
+    else
+      local idx=$(( (v - min_v) * 7 / range ))
+      out+="${blocks[$idx]}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # ── argument parsing ──────────────────────────────────────────────────────────
 usage() {
   printf '%bUsage:%b\n' "$BOLD" "$RESET"
@@ -172,6 +209,7 @@ usage() {
   printf '  %s 8.8.8.8,1.1.1.1,...         pass destinations directly (ICMP)\n' "$0"
   printf '  %s --guide                      interactive wizard\n' "$0"
   printf '  %s --csv FILE                   import targets from CSV\n' "$0"
+  printf '  %s --log FILE                   append state-change events to FILE\n' "$0"
   printf '\n%bCSV format%b (ip,label,probe — label/probe optional):\n' "$BOLD" "$RESET"
   printf '  8.8.8.8,Google DNS,icmp\n'
   printf '  10.0.0.1,Web server,tcp:80\n'
@@ -182,6 +220,7 @@ usage() {
 
 TARGETS=()
 MODE="default"
+EVENT_LOG=""
 
 load_csv() {
   local file="$1"
@@ -234,43 +273,103 @@ run_guide() {
   fi
 }
 
-case "${1:-}" in
-  --guide)
-    MODE="guide"
-    run_guide
-    ;;
-  --csv)
-    MODE="csv"
-    [ -z "${2:-}" ] && { printf 'Usage: %s --csv FILE\n' "$0" >&2; exit 1; }
-    load_csv "$2"
-    ;;
-  --help|-h)
-    usage
-    ;;
-  *)
-    raw="${1:-}"
-    if [ -z "$raw" ]; then
-      printf 'Enter destinations (comma-separated IPs or hostnames): '
-      read -r raw
-    fi
-    [ -z "$raw" ] && { printf 'No destinations provided.\n' >&2; exit 1; }
-    IFS=',' read -ra parts <<< "$raw"
-    for dest in "${parts[@]}"; do
-      dest="${dest// /}"
-      [ -n "$dest" ] && TARGETS+=("${dest}|${dest}|icmp")
-    done
-    ;;
-esac
+# consume args left-to-right so --log can appear in any position
+_args=("$@")
+_idx=0
+while [ $_idx -lt ${#_args[@]} ]; do
+  case "${_args[$_idx]}" in
+    --guide) MODE="guide" ;;
+    --csv)
+      MODE="csv"
+      _idx=$(( _idx + 1 ))
+      [ $_idx -ge ${#_args[@]} ] && { printf 'Usage: %s --csv FILE\n' "$0" >&2; exit 1; }
+      load_csv "${_args[$_idx]}"
+      ;;
+    --log)
+      _idx=$(( _idx + 1 ))
+      [ $_idx -ge ${#_args[@]} ] && { printf 'Usage: %s --log FILE\n' "$0" >&2; exit 1; }
+      EVENT_LOG="${_args[$_idx]}"
+      ;;
+    --help|-h) usage ;;
+    *)
+      if [ "$MODE" = "default" ] && [ -z "${_INLINE_IPS:-}" ]; then
+        _INLINE_IPS="${_args[$_idx]}"
+      fi
+      ;;
+  esac
+  _idx=$(( _idx + 1 ))
+done
+
+if [ "$MODE" = "guide" ]; then
+  run_guide
+elif [ "$MODE" = "default" ]; then
+  raw="${_INLINE_IPS:-}"
+  if [ -z "$raw" ]; then
+    printf 'Enter destinations (comma-separated IPs or hostnames): '
+    read -r raw
+  fi
+  [ -z "$raw" ] && { printf 'No destinations provided.\n' >&2; exit 1; }
+  IFS=',' read -ra parts <<< "$raw"
+  for dest in "${parts[@]}"; do
+    dest="${dest// /}"
+    [ -n "$dest" ] && TARGETS+=("${dest}|${dest}|icmp")
+  done
+fi
 
 [ "${#TARGETS[@]}" -eq 0 ] && { printf 'No targets.\n' >&2; exit 1; }
 
 # ── setup ─────────────────────────────────────────────────────────────────────
 WORK_DIR=$(mktemp -d -t ping-multiple.XXXXXX)
+EXPORT_CSV="ping-multiple-$(date +%Y-%m-%d-%H%M).csv"
+
+export_csv() {
+  printf 'host,label,probe,samples,good,slow,timeout,loss_pct,min_ms,avg_ms,max_ms\n' > "$EXPORT_CSV"
+  local idx=0
+  for entry in "${TARGETS[@]}"; do
+    IFS='|' read -r host label probe <<< "$entry"
+    local bar_file="$WORK_DIR/$idx.bar"
+    local rtt_file="$WORK_DIR/$idx.rtt"
+    local spark_file="$WORK_DIR/$idx.rtts"
+    local s=""; [ -s "$bar_file" ] && s=$(cat "$bar_file")
+    local total=${#s} tmp
+    tmp="${s//G/}"; local good=$(( total - ${#tmp} ))
+    tmp="${s//Y/}"; local slow=$(( total - ${#tmp} ))
+    tmp="${s//R/}"; local tout=$(( total - ${#tmp} ))
+    local loss=0; (( total > 0 )) && loss=$(( tout * 100 / total ))
+
+    local min_ms="-" avg_ms="-" max_ms="-"
+    if [ -s "$spark_file" ]; then
+      local rtt_vals; read -ra rtt_vals < "$spark_file"
+      local sum=0 cnt=0 mn=999999 mx=0
+      for v in "${rtt_vals[@]}"; do
+        [ "$v" = "-1" ] && continue
+        sum=$(( sum + v )); cnt=$(( cnt + 1 ))
+        (( v < mn )) && mn=$v
+        (( v > mx )) && mx=$v
+      done
+      if (( cnt > 0 )); then
+        min_ms=$mn; avg_ms=$(( sum / cnt )); max_ms=$mx
+      fi
+    elif [ -s "$rtt_file.tcp" ]; then
+      local tcp_lat; IFS='|' read -r _ tcp_lat < "$rtt_file.tcp"
+      [ "$tcp_lat" != "-1" ] && min_ms=$tcp_lat && avg_ms=$tcp_lat && max_ms=$tcp_lat
+    fi
+
+    printf '%s,%s,%s,%d,%d,%d,%d,%d,%s,%s,%s\n' \
+      "$host" "$label" "$(probe_label "$probe")" \
+      "$total" "$good" "$slow" "$tout" "$loss" \
+      "$min_ms" "$avg_ms" "$max_ms" >> "$EXPORT_CSV"
+    idx=$(( idx + 1 ))
+  done
+}
+
 cleanup() {
   trap - EXIT INT TERM
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || true; done
+  export_csv
   rm -rf "$WORK_DIR"
   printf '\033[?25h'
+  printf '\nSession summary written to %s\n' "$EXPORT_CSV"
 }
 trap cleanup EXIT INT TERM
 printf '\033[?25l'
@@ -288,10 +387,11 @@ for entry in "${TARGETS[@]}"; do
   IFS='|' read -r host _label probe <<< "$entry"
   bar_file="$WORK_DIR/$i.bar"
   rtt_file="$WORK_DIR/$i.rtt"
+  spark_file="$WORK_DIR/$i.rtts"
   : > "$bar_file"
 
   if [ "$probe" = "icmp" ]; then
-    # fast probe — 1s cadence, drives bar
+    # fast probe — 1s cadence, drives bar + sparkline ring buffer
     (
       while :; do
         rtt=$(run_ping "$FAST_TIMEOUT" "$host")
@@ -311,6 +411,15 @@ for entry in "${TARGETS[@]}"; do
         printf '%s|%s|F\n' "$ts" "$rtt" > "$rtt_file.fast"
         contents=$(cat "$bar_file")
         (( ${#contents} > HISTORY )) && printf '%s' "${contents: -HISTORY}" > "$bar_file"
+
+        # update sparkline ring buffer (space-separated ints, newest last)
+        existing=""; [ -s "$spark_file" ] && read -r existing < "$spark_file"
+        read -ra spark_vals <<< "$existing"
+        spark_vals+=("$rtt")
+        (( ${#spark_vals[@]} > SPARKLINE_HISTORY )) && \
+          spark_vals=("${spark_vals[@]: -${SPARKLINE_HISTORY}}")
+        printf '%s\n' "${spark_vals[*]}" > "$spark_file"
+
         sleep "$FAST_INTERVAL"
       done
     ) &
@@ -353,16 +462,33 @@ printf '%b%s%b  %b(Ctrl-C to quit | icmp: green<%dms yellow=slow | tcp: every %d
   "$BOLD" "$title" "$RESET" "$DIM" "$SLOW_MS" "$TCP_INTERVAL" "$RESET"
 echo
 
+# per-host previous-status tracking for state-change alerts
+declare -a PREV_STATUS
+for (( k=0; k<${#TARGETS[@]}; k++ )); do PREV_STATUS[$k]="?"; done
+
+emit_event() {
+  local ts="$1" host="$2" label="$3" prev="$4" next="$5"
+  local when
+  when=$(date -d "@$(( ts / 1000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || \
+         date -r  "$(( ts / 1000 ))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || \
+         printf '%s' "$ts")
+  local line="${when} | ${host} (${label}) | ${prev} -> ${next}"
+  printf '\a'
+  [ -n "$EVENT_LOG" ] && printf '%s\n' "$line" >> "$EVENT_LOG"
+}
+
 while :; do
   printf '\033[3;1H'
+  cur_ms=$(now_ms)
   i=0
   for entry in "${TARGETS[@]}"; do
     IFS='|' read -r host label probe <<< "$entry"
     bar_file="$WORK_DIR/$i.bar"
     rtt_file="$WORK_DIR/$i.rtt"
+    spark_file="$WORK_DIR/$i.rtts"
     plabel=$(probe_label "$probe")
 
-    # build bar
+    # build colour bar
     samples=""; [ -s "$bar_file" ] && samples=$(cat "$bar_file")
     bar=""; last_bucket=""
     if [ -n "$samples" ]; then
@@ -379,22 +505,22 @@ while :; do
       for ((p=0; p<HISTORY; p++)); do bar+="$GRAY"; done
     fi
 
-    # build status + rtt_str
+    # determine status (plain word, coloured separately)
     if [ "$probe" = "icmp" ]; then
       rtt_pair=$(latest_rtt "$rtt_file")
       last_rtt="${rtt_pair%%|*}"; last_src="${rtt_pair#*|}"
 
       if [ "$last_rtt" = "-1" ] || [ -z "$last_rtt" ] || \
          { [ "$last_bucket" = "R" ] && [ "$last_src" = "?" ]; }; then
-        status=$'\033[1;31mDOWN\033[0m'
+        status="DOWN"
       elif [ "$last_rtt" -gt "$SLOW_MS" ] 2>/dev/null; then
-        status=$'\033[1;33mSLOW\033[0m'
+        status="SLOW"
       elif [ "$last_rtt" -ge 0 ] 2>/dev/null; then
-        status=$'\033[1;32mUP  \033[0m'
+        status="UP"
       elif [ "$last_bucket" = "R" ]; then
-        status=$'\033[1;31mDOWN\033[0m'
+        status="DOWN"
       else
-        status=$'\033[2m... \033[0m'
+        status="INIT"
       fi
 
       if [ "$last_rtt" = "-1" ]; then
@@ -411,23 +537,45 @@ while :; do
       [ -s "$rtt_file.tcp" ] && IFS='|' read -r tcp_ts tcp_lat < "$rtt_file.tcp"
 
       if [ "$tcp_ts" -eq 0 ]; then
-        status=$'\033[2m... \033[0m'; rtt_str="     -"
+        status="INIT"; rtt_str="     -"
       else
-        stale=$(( $(now_ms) - tcp_ts ))
+        stale=$(( cur_ms - tcp_ts ))
         if [ "$stale" -gt "$TCP_STALE" ]; then
-          status=$'\033[2m... \033[0m'; rtt_str="     -"
+          status="INIT"; rtt_str="     -"
         elif [ "$tcp_lat" = "-1" ]; then
-          status=$'\033[1;31mDOWN\033[0m'
-          rtt_str=$'\033[31m   TO \033[0m'
+          status="DOWN"; rtt_str=$'\033[31m   TO \033[0m'
         else
-          status=$'\033[1;32mUP  \033[0m'
-          rtt_str=$(printf '%4sms ' "$tcp_lat")
+          status="UP";   rtt_str=$(printf '%4sms ' "$tcp_lat")
         fi
       fi
     fi
 
+    # fire alert on UP<->DOWN/<->SLOW transitions (skip INIT / warm-up)
+    prev="${PREV_STATUS[$i]}"
+    if [ "$prev" != "?" ] && [ "$prev" != "$status" ] && \
+       [ "$status" != "INIT" ] && [ "$prev" != "INIT" ]; then
+      emit_event "$cur_ms" "$host" "$label" "$prev" "$status"
+    fi
+    PREV_STATUS[$i]="$status"
+
+    # colour the status word
+    case "$status" in
+      UP)   status_disp=$'\033[1;32mUP  \033[0m' ;;
+      SLOW) status_disp=$'\033[1;33mSLOW\033[0m' ;;
+      DOWN) status_disp=$'\033[1;31mDOWN\033[0m' ;;
+      *)    status_disp=$'\033[2m... \033[0m'     ;;
+    esac
+
+    # sparkline (ICMP only; TCP gets blank padding to keep columns aligned)
+    if [ "$probe" = "icmp" ]; then
+      spark=$(render_sparkline "$spark_file")
+    else
+      spark=$(printf '%*s' "$SPARKLINE_HISTORY" '')
+    fi
+
     combined="${host}  ${label}  [${plabel}]"
-    printf "  %b  %b  %-${maxlabel}s  [%s]\033[K\n" "$status" "$rtt_str" "$combined" "$bar"
+    printf "  %b  %b  %-${maxlabel}s  [%s] %b%s%b\033[K\n" \
+      "$status_disp" "$rtt_str" "$combined" "$bar" "$DIM" "$spark" "$RESET"
     i=$(( i + 1 ))
   done
 

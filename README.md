@@ -97,7 +97,14 @@ mail.example.com,Mail server,tcp:25
 | `rdp` | Shorthand for `tcp:3389` |
 | `8080` | Bare port number, treated as `tcp:8080` |
 
-Press **Ctrl-C** to quit. The terminal cursor and temp files are cleaned up automatically on exit.
+Pass `--log FILE` to record every state change to a file as well:
+
+```
+./ping-multiple.sh --guide --log events.log
+./ping-multiple.sh --csv targets.csv --log /var/log/ping-events.log
+```
+
+Press **Ctrl-C** to quit. The terminal cursor and temp files are cleaned up automatically on exit. A summary CSV is written to the current directory on exit.
 
 ## Screenshots
 
@@ -132,6 +139,7 @@ DOWN   TO    10.0.0.2  Database  [TCP:5432]  [███████████�
 | Host | IP or hostname as supplied |
 | Probe | Probe type in brackets |
 | Bar | 60 most-recent probe results, newest on the right |
+| Sparkline | 20-sample RTT trend using block chars `▁▂▃▄▅▆▇█` (ICMP only) |
 
 A summary line at the bottom shows total sample counts and overall loss percentage across all hosts.
 
@@ -150,6 +158,7 @@ The thresholds are plain variables near the top of the script:
 | `COUNT` | 2 | ICMP packets sent per probe |
 | `TCP_INTERVAL` | 10 | Seconds between TCP probes |
 | `TCP_TIMEOUT` | 5 | Connect timeout for TCP probes (seconds) |
+| `SPARKLINE_HISTORY` | 20 | Number of RTT samples shown in the sparkline |
 
 ## Permissions
 
@@ -162,6 +171,12 @@ sudo setcap cap_net_raw+ep /usr/bin/ping
 TCP checks use `nc` and do not require elevated privileges.
 
 ## Changelog
+
+### v1.3.0 — 2026-06-16
+- Added state-change alerts: terminal bell on every UP↔DOWN/SLOW transition
+- Added `--log FILE` flag to record timestamped state-change events to a file
+- Added RTT sparkline per host using 8-level block characters (`▁▂▃▄▅▆▇█`, ICMP only)
+- Added CSV export on exit: per-host samples, loss%, min/avg/max RTT written to `ping-multiple-YYYY-MM-DD-HHmm.csv`
 
 ### v1.2.0 — 2026-06-16
 - Added TCP port probe support (`tcp:PORT`) — monitor SSH, HTTP, HTTPS, or any TCP service per target
