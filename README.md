@@ -99,6 +99,20 @@ mail.example.com,Mail server,tcp:25
 
 Press **Ctrl-C** to quit. The terminal cursor and temp files are cleaned up automatically on exit.
 
+## Screenshots
+
+**Interactive setup wizard (`--guide`)**
+
+![Guide wizard](assets/screenshot-guide.png)
+
+**Dashboard — warming up**
+
+![Dashboard early state](assets/screenshot-dashboard-1.png)
+
+**Dashboard — after ~40 seconds**
+
+![Dashboard with history](assets/screenshot-dashboard-2.png)
+
 ## Display columns
 
 ```
