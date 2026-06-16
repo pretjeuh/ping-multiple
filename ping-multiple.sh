@@ -435,15 +435,19 @@ for entry in "${TARGETS[@]}"; do
   else
     # TCP probe — 10s cadence
     port="${probe#tcp:}"
+    _bar="$bar_file"
+    _rtt="$rtt_file"
+    _host="$host"
+    _port="$port"
     (
       while :; do
-        lat=$(check_tcp "$host" "$port" "$TCP_TIMEOUT")
+        lat=$(check_tcp "$_host" "$_port" "$TCP_TIMEOUT")
         ts=$(now_ms)
-        printf '%s|%s\n' "$ts" "$lat" > "$rtt_file.tcp"
+        printf '%s|%s\n' "$ts" "$lat" > "$_rtt.tcp"
         if [ "$lat" = "-1" ]; then bucket="R"; else bucket="G"; fi
-        printf '%s' "$bucket" >> "$bar_file"
-        contents=$(cat "$bar_file")
-        (( ${#contents} > HISTORY )) && printf '%s' "${contents: -HISTORY}" > "$bar_file"
+        printf '%s' "$bucket" >> "$_bar"
+        contents=$(cat "$_bar")
+        (( ${#contents} > HISTORY )) && printf '%s' "${contents: -HISTORY}" > "$_bar"
         sleep "$TCP_INTERVAL"
       done
     ) &
