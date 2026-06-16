@@ -502,6 +502,15 @@ while :; do
 
     # build colour bar (display BAR_WIDTH newest samples from the ring buffer)
     samples=""; [ -s "$bar_file" ] && samples=$(cat "$bar_file")
+    # expand TCP samples so each probe result fills TCP_INTERVAL display blocks
+    if [ "$probe" != "icmp" ] && [ -n "$samples" ]; then
+      expanded=""
+      for ((c=0; c<${#samples}; c++)); do
+        ch="${samples:c:1}"
+        for ((e=0; e<TCP_INTERVAL; e++)); do expanded+="$ch"; done
+      done
+      samples="$expanded"
+    fi
     # take only the newest BAR_WIDTH chars for display
     (( ${#samples} > BAR_WIDTH )) && samples="${samples: -${BAR_WIDTH}}"
     bar=""; last_bucket=""
