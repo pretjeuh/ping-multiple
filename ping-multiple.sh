@@ -381,6 +381,14 @@ for entry in "${TARGETS[@]}"; do
   (( ${#combined} > maxlabel )) && maxlabel=${#combined}
 done
 
+# fit bar + sparkline into available terminal width
+# fixed columns: 2(indent) + 4(status) + 2(sep) + 6(rtt) + 2(sep) + maxlabel + 3([) + 2(] ) + SPARKLINE_HISTORY
+_term_cols=$(tput cols 2>/dev/null || printf '120')
+_fixed=$(( 2 + 4 + 2 + 6 + 2 + maxlabel + 3 + 2 + SPARKLINE_HISTORY ))
+_avail=$(( _term_cols - _fixed ))
+(( _avail < 10 )) && _avail=10
+(( _avail < HISTORY )) && HISTORY=$_avail
+
 # ── spawn workers ─────────────────────────────────────────────────────────────
 i=0
 for entry in "${TARGETS[@]}"; do
