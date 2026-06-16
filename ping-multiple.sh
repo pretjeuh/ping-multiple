@@ -377,7 +377,8 @@ printf '\033[?25l'
 maxlabel=0
 for entry in "${TARGETS[@]}"; do
   IFS='|' read -r _h _l probe <<< "$entry"
-  combined="${_h}  ${_l}  [$(probe_label "$probe")]"
+  [ "$_h" = "$_l" ] && combined="${_h}  [$(probe_label "$probe")]" \
+                    || combined="${_h}  ${_l}  [$(probe_label "$probe")]"
   (( ${#combined} > maxlabel )) && maxlabel=${#combined}
 done
 
@@ -385,7 +386,7 @@ done
 _term_cols=$(tput cols 2>/dev/null || printf '120')
 _fixed=$(( 2 + 4 + 2 + 6 + 2 + maxlabel + 3 + 2 + SPARKLINE_HISTORY ))
 _avail=$(( _term_cols - _fixed ))
-(( _avail < 10 )) && _avail=10
+(( _avail < 20 )) && _avail=20
 BAR_WIDTH=$(( _avail < HISTORY ? _avail : HISTORY ))
 
 # ── spawn workers ─────────────────────────────────────────────────────────────
@@ -586,7 +587,8 @@ while :; do
       spark=$(printf '%*s' "$SPARKLINE_HISTORY" '')
     fi
 
-    combined="${host}  ${label}  [${plabel}]"
+    [ "$host" = "$label" ] && combined="${host}  [${plabel}]" \
+                           || combined="${host}  ${label}  [${plabel}]"
     printf "  %b  %b  %-${maxlabel}s  [%s] %b%s%b\033[K\n" \
       "$status_disp" "$rtt_str" "$combined" "$bar" "$DIM" "$spark" "$RESET"
     i=$(( i + 1 ))
