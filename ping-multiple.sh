@@ -381,13 +381,12 @@ for entry in "${TARGETS[@]}"; do
   (( ${#combined} > maxlabel )) && maxlabel=${#combined}
 done
 
-# fit bar + sparkline into available terminal width
-# fixed columns: 2(indent) + 4(status) + 2(sep) + 6(rtt) + 2(sep) + maxlabel + 3([) + 2(] ) + SPARKLINE_HISTORY
+# BAR_WIDTH: how many blocks to display (separate from HISTORY ring buffer size)
 _term_cols=$(tput cols 2>/dev/null || printf '120')
 _fixed=$(( 2 + 4 + 2 + 6 + 2 + maxlabel + 3 + 2 + SPARKLINE_HISTORY ))
 _avail=$(( _term_cols - _fixed ))
 (( _avail < 10 )) && _avail=10
-(( _avail < HISTORY )) && HISTORY=$_avail
+BAR_WIDTH=$(( _avail < HISTORY ? _avail : HISTORY ))
 
 # ── spawn workers ─────────────────────────────────────────────────────────────
 i=0
@@ -500,11 +499,13 @@ while :; do
     spark_file="$WORK_DIR/$i.rtts"
     plabel=$(probe_label "$probe")
 
-    # build colour bar
+    # build colour bar (display BAR_WIDTH newest samples from the ring buffer)
     samples=""; [ -s "$bar_file" ] && samples=$(cat "$bar_file")
+    # take only the newest BAR_WIDTH chars for display
+    (( ${#samples} > BAR_WIDTH )) && samples="${samples: -${BAR_WIDTH}}"
     bar=""; last_bucket=""
     if [ -n "$samples" ]; then
-      pad=$(( HISTORY - ${#samples} ))
+      pad=$(( BAR_WIDTH - ${#samples} ))
       for ((p=0; p<pad; p++)); do bar+="$GRAY"; done
       for ((c=0; c<${#samples}; c++)); do
         case "${samples:c:1}" in
@@ -514,7 +515,7 @@ while :; do
       done
       last_bucket="${samples: -1}"
     else
-      for ((p=0; p<HISTORY; p++)); do bar+="$GRAY"; done
+      for ((p=0; p<BAR_WIDTH; p++)); do bar+="$GRAY"; done
     fi
 
     # determine status (plain word, coloured separately)
