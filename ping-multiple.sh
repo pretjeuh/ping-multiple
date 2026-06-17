@@ -15,7 +15,7 @@
 #   10.0.0.2,Database,tcp:5432
 #   (label and probe are optional; defaults: label=ip  probe=icmp)
 #
-# Probe types: icmp | tcp:PORT | ssh (=tcp:22) | http (=tcp:80) | https (=tcp:443) | rdp | <port number>
+# Probe types: icmp | tcp:PORT | udp:PORT | ssh (=tcp:22) | http (=tcp:80) | https (=tcp:443) | rdp | dns (=udp:53) | ntp (=udp:123) | snmp (=udp:161) | <port number>
 #
 # Hybrid probe model (ICMP):
 #   Fast probe  : 1s cadence, 1s deadline — drives the rolling bar.
