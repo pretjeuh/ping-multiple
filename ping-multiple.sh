@@ -565,7 +565,7 @@ while :; do
       expanded=""
       for ((c=0; c<${#samples}; c++)); do
         ch="${samples:c:1}"
-        for ((e=0; e<TCP_INTERVAL; e++)); do expanded+="$ch"; done
+        for ((e=0; e<3; e++)); do expanded+="$ch"; done
       done
       samples="$expanded"
     fi
