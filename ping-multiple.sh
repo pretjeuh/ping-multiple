@@ -388,8 +388,11 @@ export_csv() {
   done
 }
 
+_QUITTING=0
+
 cleanup() {
   trap - EXIT INT TERM
+  _QUITTING=1
   stty echo echoctl 2>/dev/null || true
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || true; done
   export_csv
@@ -553,6 +556,7 @@ emit_event() {
 }
 
 while :; do
+  [ "$_QUITTING" = 1 ] && break
   printf '\033[3;1H'
   cur_ms=$(now_ms)
   i=0
