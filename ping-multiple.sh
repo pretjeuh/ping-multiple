@@ -390,13 +390,18 @@ export_csv() {
 
 cleanup() {
   trap - EXIT INT TERM
+  stty echo echoctl 2>/dev/null || true
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || true; done
   export_csv
   rm -rf "$WORK_DIR"
-  printf '\033[?25h'
-  printf '\nSession summary written to %s\n' "$EXPORT_CSV"
+  # move cursor below dashboard before restoring it
+  local rows
+  rows=$(tput lines 2>/dev/null || printf '24')
+  printf '\033[%d;1H\033[?25h\n' "$rows"
+  printf 'Session summary written to %s\n' "$EXPORT_CSV"
 }
 trap cleanup EXIT INT TERM
+stty -echoctl 2>/dev/null || true
 printf '\033[?25l'
 
 maxlabel=0
