@@ -91,10 +91,14 @@ mail.example.com,Mail server,tcp:25
 |-------|---------|
 | `icmp` | ICMP ping (default) |
 | `tcp:PORT` | TCP connect to any port |
+| `udp:PORT` | UDP probe to any port |
 | `ssh` | Shorthand for `tcp:22` |
 | `http` | Shorthand for `tcp:80` |
 | `https` | Shorthand for `tcp:443` |
 | `rdp` | Shorthand for `tcp:3389` |
+| `dns` | Shorthand for `udp:53` |
+| `ntp` | Shorthand for `udp:123` |
+| `snmp` | Shorthand for `udp:161` |
 | `8080` | Bare port number, treated as `tcp:8080` |
 
 Pass `--log FILE` to record every state change to a file as well:
@@ -171,6 +175,11 @@ sudo setcap cap_net_raw+ep /usr/bin/ping
 TCP checks use `nc` and do not require elevated privileges.
 
 ## Changelog
+
+### v1.4.0 — 2026-06-17
+- Added UDP probe support (`udp:PORT`) — monitor DNS, NTP, SNMP, or any UDP service per target
+- Added probe type shorthand aliases: `dns` (udp:53), `ntp` (udp:123), `snmp` (udp:161)
+- Added RTT sparkline for TCP and UDP targets (was ICMP-only)
 
 ### v1.3.0 — 2026-06-16
 - Added state-change alerts: terminal bell on every UP↔DOWN/SLOW transition

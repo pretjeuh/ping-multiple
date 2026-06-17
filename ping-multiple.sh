@@ -125,6 +125,22 @@ check_tcp() {
   fi
 }
 
+check_udp() {
+  local host="$1" port="$2" tout="$3"
+  local t0 t1 rc
+  t0=$(now_ms)
+  if [ -n "$TIMEOUT_CMD" ]; then
+    $TIMEOUT_CMD "$tout" nc -zu "$host" "$port" 2>/dev/null
+  else
+    nc -zu "$host" "$port" 2>/dev/null
+  fi
+  rc=$?
+  t1=$(now_ms)
+  if [ $rc -eq 0 ]; then printf '%d' $(( t1 - t0 ))
+  else                    printf '%d' -1
+  fi
+}
+
 latest_rtt() {
   local base="$1"
   local f="$base.fast" s="$base.slow"
@@ -146,12 +162,17 @@ latest_rtt() {
 
 probe_label() {
   case "$1" in
-    icmp)    printf 'ICMP'               ;;
-    tcp:22)  printf 'SSH'                ;;
-    tcp:80)  printf 'HTTP'               ;;
-    tcp:443) printf 'HTTPS'              ;;
-    tcp:*)   printf 'TCP:%s' "${1#tcp:}" ;;
-    *)       printf '%s' "$1"            ;;
+    icmp)     printf 'ICMP'               ;;
+    tcp:22)   printf 'SSH'                ;;
+    tcp:80)   printf 'HTTP'               ;;
+    tcp:443)  printf 'HTTPS'              ;;
+    tcp:3389) printf 'RDP'                ;;
+    tcp:*)    printf 'TCP:%s' "${1#tcp:}" ;;
+    udp:53)   printf 'DNS'                ;;
+    udp:123)  printf 'NTP'                ;;
+    udp:161)  printf 'SNMP'               ;;
+    udp:*)    printf 'UDP:%s' "${1#udp:}" ;;
+    *)        printf '%s' "$1"            ;;
   esac
 }
 
@@ -160,10 +181,14 @@ parse_probe() {
   case "$input" in
     icmp|ping|"") printf 'icmp'            ;;
     tcp:*)        printf '%s' "$input"     ;;
+    udp:*)        printf '%s' "$input"     ;;
     ssh)          printf 'tcp:22'          ;;
     http)         printf 'tcp:80'          ;;
     https)        printf 'tcp:443'         ;;
     rdp)          printf 'tcp:3389'        ;;
+    dns)          printf 'udp:53'          ;;
+    ntp)          printf 'udp:123'         ;;
+    snmp)         printf 'udp:161'         ;;
     [0-9]*)       printf 'tcp:%s' "$input" ;;
     *)            printf 'icmp'            ;;
   esac
@@ -214,7 +239,7 @@ usage() {
   printf '  8.8.8.8,Google DNS,icmp\n'
   printf '  10.0.0.1,Web server,tcp:80\n'
   printf '  10.0.0.2,Database,tcp:5432\n'
-  printf '\n%bProbe types:%b  icmp  tcp:PORT  ssh  http  https  rdp  <port number>\n' "$BOLD" "$RESET"
+  printf '\n%bProbe types:%b  icmp  tcp:PORT  udp:PORT  ssh  http  https  rdp  dns  ntp  snmp  <port number>\n' "$BOLD" "$RESET"
   exit 1
 }
 
@@ -249,7 +274,7 @@ run_guide() {
   done
   [ "${#cleaned[@]}" -eq 0 ] && { printf 'No valid IPs.\n' >&2; exit 1; }
 
-  printf '\n%bProbe types:%b  icmp  tcp:PORT  ssh  http  https  rdp  <port number>\n' "$BOLD" "$RESET"
+  printf '\n%bProbe types:%b  icmp  tcp:PORT  udp:PORT  ssh  http  https  rdp  dns  ntp  snmp  <port number>\n' "$BOLD" "$RESET"
   printf '\nApply one probe type to ALL hosts, or configure per-host?\n'
   printf '  [1] Same probe for all  (default)\n'
   printf '  [2] Configure per host\n'
@@ -440,11 +465,12 @@ for entry in "${TARGETS[@]}"; do
         sleep "$SLOW_INTERVAL"
       done
     ) &
-  else
+  elif [[ "$probe" == tcp:* ]]; then
     # TCP probe — 10s cadence
     port="${probe#tcp:}"
     _bar="$bar_file"
     _rtt="$rtt_file"
+    _spark="$spark_file"
     _host="$host"
     _port="$port"
     (
@@ -456,6 +482,38 @@ for entry in "${TARGETS[@]}"; do
         printf '%s' "$bucket" >> "$_bar"
         contents=$(cat "$_bar")
         (( ${#contents} > HISTORY )) && printf '%s' "${contents: -HISTORY}" > "$_bar"
+        existing=""; [ -s "$_spark" ] && read -r existing < "$_spark"
+        read -ra spark_vals <<< "$existing"
+        spark_vals+=("$lat")
+        (( ${#spark_vals[@]} > SPARKLINE_HISTORY )) && \
+          spark_vals=("${spark_vals[@]: -${SPARKLINE_HISTORY}}")
+        printf '%s\n' "${spark_vals[*]}" > "$_spark"
+        sleep "$TCP_INTERVAL"
+      done
+    ) &
+  else
+    # UDP probe — 10s cadence
+    port="${probe#udp:}"
+    _bar="$bar_file"
+    _rtt="$rtt_file"
+    _spark="$spark_file"
+    _host="$host"
+    _port="$port"
+    (
+      while :; do
+        lat=$(check_udp "$_host" "$_port" "$TCP_TIMEOUT")
+        ts=$(now_ms)
+        printf '%s|%s\n' "$ts" "$lat" > "$_rtt.tcp"
+        if [ "$lat" = "-1" ]; then bucket="R"; else bucket="G"; fi
+        printf '%s' "$bucket" >> "$_bar"
+        contents=$(cat "$_bar")
+        (( ${#contents} > HISTORY )) && printf '%s' "${contents: -HISTORY}" > "$_bar"
+        existing=""; [ -s "$_spark" ] && read -r existing < "$_spark"
+        read -ra spark_vals <<< "$existing"
+        spark_vals+=("$lat")
+        (( ${#spark_vals[@]} > SPARKLINE_HISTORY )) && \
+          spark_vals=("${spark_vals[@]: -${SPARKLINE_HISTORY}}")
+        printf '%s\n' "${spark_vals[*]}" > "$_spark"
         sleep "$TCP_INTERVAL"
       done
     ) &
@@ -470,7 +528,7 @@ title="Ping Dashboard"
 [ "$MODE" = "csv" ]   && title="Dashboard (CSV)"
 
 clear
-printf '%b%s%b  %b(Ctrl-C to quit | icmp: green<%dms yellow=slow | tcp: every %ds | red=down)%b\n' \
+printf '%b%s%b  %b(Ctrl-C to quit | icmp: green<%dms yellow=slow | tcp/udp: every %ds | red=down)%b\n' \
   "$BOLD" "$title" "$RESET" "$DIM" "$SLOW_MS" "$TCP_INTERVAL" "$RESET"
 echo
 
@@ -589,12 +647,8 @@ while :; do
       *)    status_disp=$'\033[2m... \033[0m'     ;;
     esac
 
-    # sparkline (ICMP only; TCP gets blank padding to keep columns aligned)
-    if [ "$probe" = "icmp" ]; then
-      spark=$(render_sparkline "$spark_file")
-    else
-      spark=$(printf '%*s' "$SPARKLINE_HISTORY" '')
-    fi
+    # sparkline for all probe types
+    spark=$(render_sparkline "$spark_file")
 
     [ "$host" = "$label" ] && combined="${host}  [${plabel}]" \
                            || combined="${host}  ${label}  [${plabel}]"
